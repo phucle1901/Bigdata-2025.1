@@ -9,7 +9,7 @@ __pycache__/
 .eggs/
 .Python
 *.log
-
+*.sh
 # Virtual environment
 .env
 .venv
