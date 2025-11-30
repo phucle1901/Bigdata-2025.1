@@ -1,270 +1,135 @@
 """
-Push dữ liệu đã crawl vào Kafka
-Đọc các file .txt từ crawl/3/* và gửi vào Kafka
+Script để đọc dữ liệu từ folder crawl/3 và gửi lên Kafka
 """
-
 import os
 import json
-import logging
 from pathlib import Path
-from typing import Dict, List
-from datetime import datetime
-from kafka_producer import CrawlDataProducer
+from kafka import KafkaProducer
+from kafka.errors import KafkaError
+import kafka_config
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Đường dẫn đến folder chứa dữ liệu
+DATA_FOLDER = Path(__file__).parent.parent / "crawl" / "3"
 
+def create_producer():
+    """Tạo Kafka producer"""
+    producer = KafkaProducer(
+        bootstrap_servers=kafka_config.KAFKA_BOOTSTRAP_SERVERS,
+        value_serializer=lambda v: json.dumps(v, ensure_ascii=False).encode('utf-8'),
+        key_serializer=lambda k: k.encode('utf-8') if k else None,
+        client_id=kafka_config.KAFKA_CLIENT_ID,
+        # Cấu hình để đảm bảo gửi thành công
+        acks='all',  # Đợi tất cả replicas xác nhận
+        retries=3,
+        max_in_flight_requests_per_connection=1
+    )
+    return producer
 
-class DataPusher:
-    """Class để đẩy dữ liệu crawl vào Kafka"""
-    
-    def __init__(self, data_path: str = "crawl/3"):
-        """
-        Khởi tạo DataPusher
+def read_document(file_path, domain):
+    """Đọc nội dung file và trả về dữ liệu dạng dict"""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
         
-        Args:
-            data_path: Đường dẫn đến thư mục chứa data crawl
-        """
-        self.data_path = Path(data_path)
-        if not self.data_path.exists():
-            raise ValueError(f"Data path không tồn tại: {data_path}")
+        # Tạo key từ domain và filename để phân phối đều
+        filename = file_path.name
         
-        self.producer = CrawlDataProducer()
-        self.stats = {
-            'total_files': 0,
-            'success': 0,
-            'failed': 0,
-            'domains': {}
-        }
-    
-    def extract_metadata_from_content(self, content: str, filename: str) -> Dict:
-        """
-        Trích xuất metadata từ nội dung văn bản
-        
-        Args:
-            content: Nội dung văn bản
-            filename: Tên file
-            
-        Returns:
-            Dict chứa metadata
-        """
-        lines = content.strip().split('\n')
-        metadata = {
+        document_data = {
+            'domain': domain,
             'filename': filename,
             'content': content,
-            'num_lines': len(lines),
-            'num_chars': len(content),
+            'file_path': str(file_path.relative_to(DATA_FOLDER))
         }
         
-        # Cố gắng trích xuất thông tin cơ bản từ đầu văn bản
-        if len(lines) > 0:
-            metadata['first_line'] = lines[0].strip()
-        
-        # Tìm số văn bản (thường ở dòng đầu có "Số:")
-        for line in lines[:20]:
-            if 'Số:' in line:
-                metadata['document_number'] = line.strip()
-                break
-        
-        # Tìm ngày ban hành
-        for line in lines[:20]:
-            if 'ngày' in line.lower() and 'tháng' in line.lower() and 'năm' in line.lower():
-                metadata['issue_date'] = line.strip()
-                break
-        
-        return metadata
+        return document_data, f"{domain}_{filename}"
+    except Exception as e:
+        print(f"Lỗi khi đọc file {file_path}: {e}")
+        return None, None
+
+def send_documents_to_kafka(producer, data_folder=DATA_FOLDER):
+    """Đọc tất cả file trong folder và gửi lên Kafka"""
+    total_files = 0
+    success_count = 0
+    error_count = 0
     
-    def read_file(self, file_path: Path, domain: str) -> Dict:
-        """
-        Đọc file và tạo document
+    # Duyệt qua tất cả các domain folder
+    for domain_folder in data_folder.iterdir():
+        if not domain_folder.is_dir():
+            continue
         
-        Args:
-            file_path: Đường dẫn file
-            domain: Tên domain (Bao-hiem, Bat-dong-san, ...)
-            
-        Returns:
-            Dict chứa thông tin document
-        """
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            
-            metadata = self.extract_metadata_from_content(content, file_path.name)
-            
-            document = {
-                'domain': domain,
-                'file_name': file_path.name,
-                'file_path': str(file_path),
-                **metadata,
-                'timestamp': datetime.now().isoformat()
-            }
-            
-            return document
-            
-        except Exception as e:
-            logger.error(f"Lỗi khi đọc file {file_path}: {e}")
-            raise
-    
-    def push_domain(self, domain_name: str) -> Dict:
-        """
-        Đẩy tất cả documents của một domain vào Kafka
+        domain = domain_folder.name
+        print(f"\nĐang xử lý domain: {domain}")
         
-        Args:
-            domain_name: Tên domain
-            
-        Returns:
-            Dict chứa thống kê
-        """
-        domain_path = self.data_path / domain_name
-        if not domain_path.exists() or not domain_path.is_dir():
-            logger.warning(f"Domain không tồn tại: {domain_name}")
-            return {'success': 0, 'failed': 0}
-        
-        txt_files = list(domain_path.glob('*.txt'))
-        logger.info(f"Bắt đầu đẩy {len(txt_files)} files từ domain: {domain_name}")
-        
-        success = 0
-        failed = 0
+        # Duyệt qua tất cả file .txt trong domain folder
+        txt_files = list(domain_folder.glob("*.txt"))
+        print(f"  Tìm thấy {len(txt_files)} file")
         
         for file_path in txt_files:
+            total_files += 1
+            document_data, key = read_document(file_path, domain)
+            
+            if document_data is None:
+                error_count += 1
+                continue
+            
             try:
-                # Đọc file
-                document = self.read_file(file_path, domain_name)
+                # Gửi message lên Kafka
+                future = producer.send(
+                    kafka_config.KAFKA_TOPIC,
+                    key=key,
+                    value=document_data
+                )
                 
-                # Gửi vào Kafka
-                key = f"{domain_name}_{file_path.stem}"
-                if self.producer.send_document(document, key=key):
-                    success += 1
-                    if success % 10 == 0:
-                        logger.info(f"  Đã gửi {success}/{len(txt_files)} files từ {domain_name}")
-                else:
-                    failed += 1
+                # Đợi xác nhận (có thể bỏ qua nếu muốn gửi async)
+                record_metadata = future.get(timeout=10)
+                
+                success_count += 1
+                if success_count % 10 == 0:
+                    print(f"  Đã gửi {success_count} documents...")
                     
+            except KafkaError as e:
+                error_count += 1
+                print(f"  Lỗi khi gửi {file_path.name}: {e}")
             except Exception as e:
-                logger.error(f"Lỗi khi xử lý file {file_path}: {e}")
-                failed += 1
-        
-        logger.info(f"Hoàn thành {domain_name}: {success} success, {failed} failed")
-        return {'success': success, 'failed': failed}
+                error_count += 1
+                print(f"  Lỗi không mong đợi với {file_path.name}: {e}")
     
-    def push_all_domains(self) -> Dict:
-        """
-        Đẩy tất cả domains vào Kafka
-        
-        Returns:
-            Dict chứa thống kê tổng thể
-        """
-        # Lấy danh sách tất cả domains (thư mục con)
-        domains = [d for d in self.data_path.iterdir() 
-                  if d.is_dir() and not d.name.startswith('.')]
-        
-        logger.info(f"Tìm thấy {len(domains)} domains")
-        logger.info(f"Domains: {[d.name for d in domains]}")
-        
-        for domain in sorted(domains):
-            domain_name = domain.name
-            result = self.push_domain(domain_name)
-            
-            self.stats['domains'][domain_name] = result
-            self.stats['success'] += result['success']
-            self.stats['failed'] += result['failed']
-            self.stats['total_files'] += result['success'] + result['failed']
-        
-        return self.stats
+    # Đảm bảo tất cả messages đã được gửi
+    producer.flush()
     
-    def push_specific_domains(self, domain_names: List[str]) -> Dict:
-        """
-        Đẩy các domains cụ thể vào Kafka
-        
-        Args:
-            domain_names: List tên domains
-            
-        Returns:
-            Dict chứa thống kê
-        """
-        logger.info(f"Đẩy {len(domain_names)} domains được chỉ định")
-        
-        for domain_name in domain_names:
-            result = self.push_domain(domain_name)
-            
-            self.stats['domains'][domain_name] = result
-            self.stats['success'] += result['success']
-            self.stats['failed'] += result['failed']
-            self.stats['total_files'] += result['success'] + result['failed']
-        
-        return self.stats
-    
-    def print_stats(self):
-        """In thống kê"""
-        print("\n" + "="*60)
-        print("THỐNG KÊ ĐẨY DỮ LIỆU VÀO KAFKA")
-        print("="*60)
-        print(f"Tổng số files: {self.stats['total_files']}")
-        print(f"Thành công: {self.stats['success']}")
-        print(f"Thất bại: {self.stats['failed']}")
-        print(f"Tỷ lệ thành công: {self.stats['success']/max(1, self.stats['total_files'])*100:.2f}%")
-        print("\nThống kê theo domain:")
-        print("-"*60)
-        
-        for domain, result in sorted(self.stats['domains'].items()):
-            total = result['success'] + result['failed']
-            print(f"  {domain:30s}: {result['success']:4d}/{total:4d} files")
-        
-        print("="*60)
-    
-    def close(self):
-        """Đóng producer"""
-        self.producer.close()
-    
-    def __enter__(self):
-        """Context manager enter"""
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit"""
-        self.close()
-
+    print(f"\n{'='*50}")
+    print(f"Hoàn thành!")
+    print(f"Tổng số file: {total_files}")
+    print(f"Thành công: {success_count}")
+    print(f"Lỗi: {error_count}")
+    print(f"{'='*50}")
 
 def main():
     """Hàm main"""
-    import argparse
+    print("Khởi tạo Kafka Producer...")
+    print(f"Bootstrap servers: {kafka_config.KAFKA_BOOTSTRAP_SERVERS}")
+    print(f"Topic: {kafka_config.KAFKA_TOPIC}")
+    print(f"Data folder: {DATA_FOLDER}")
     
-    parser = argparse.ArgumentParser(description='Đẩy dữ liệu crawl vào Kafka')
-    parser.add_argument('--data-path', default='crawl/3', 
-                       help='Đường dẫn đến thư mục data')
-    parser.add_argument('--domains', nargs='+', 
-                       help='Chỉ đẩy các domains cụ thể (cách nhau bởi dấu cách)')
-    parser.add_argument('--list-domains', action='store_true',
-                       help='Liệt kê tất cả domains và thoát')
-    
-    args = parser.parse_args()
-    
-    # Liệt kê domains
-    if args.list_domains:
-        data_path = Path(args.data_path)
-        domains = [d.name for d in data_path.iterdir() 
-                  if d.is_dir() and not d.name.startswith('.')]
-        print(f"\nTìm thấy {len(domains)} domains trong {args.data_path}:")
-        for i, domain in enumerate(sorted(domains), 1):
-            num_files = len(list((data_path / domain).glob('*.txt')))
-            print(f"{i:2d}. {domain:30s} ({num_files} files)")
+    # Kiểm tra folder tồn tại
+    if not DATA_FOLDER.exists():
+        print(f"Lỗi: Folder {DATA_FOLDER} không tồn tại!")
         return
     
-    # Đẩy data
-    with DataPusher(args.data_path) as pusher:
-        if args.domains:
-            # Đẩy các domains được chỉ định
-            pusher.push_specific_domains(args.domains)
-        else:
-            # Đẩy tất cả domains
-            pusher.push_all_domains()
+    try:
+        producer = create_producer()
+        print("Kết nối Kafka thành công!\n")
         
-        pusher.print_stats()
-
+        send_documents_to_kafka(producer)
+        
+    except Exception as e:
+        print(f"Lỗi khi khởi tạo producer: {e}")
+        print("Hãy đảm bảo Kafka đang chạy (docker-compose up)")
+    finally:
+        if 'producer' in locals():
+            producer.close()
+            print("\nĐã đóng kết nối Kafka")
 
 if __name__ == "__main__":
     main()
+
