@@ -11,19 +11,7 @@ import kafka_config
 # Đường dẫn đến folder chứa dữ liệu
 DATA_FOLDER = Path(__file__).parent.parent / "crawl" / "3"
 
-def create_producer():
-    """Tạo Kafka producer"""
-    producer = KafkaProducer(
-        bootstrap_servers=kafka_config.KAFKA_BOOTSTRAP_SERVERS,
-        value_serializer=lambda v: json.dumps(v, ensure_ascii=False).encode('utf-8'),
-        key_serializer=lambda k: k.encode('utf-8') if k else None,
-        client_id=kafka_config.KAFKA_CLIENT_ID,
-        # Cấu hình để đảm bảo gửi thành công
-        acks='all',  # Đợi tất cả replicas xác nhận
-        retries=3,
-        max_in_flight_requests_per_connection=1
-    )
-    return producer
+
 
 def read_document(file_path, domain):
     """Đọc nội dung file và trả về dữ liệu dạng dict"""
@@ -45,7 +33,19 @@ def read_document(file_path, domain):
     except Exception as e:
         print(f"Lỗi khi đọc file {file_path}: {e}")
         return None, None
-
+def create_producer():
+    """Tạo Kafka producer"""
+    producer = KafkaProducer(
+        bootstrap_servers=kafka_config.KAFKA_BOOTSTRAP_SERVERS,
+        value_serializer=lambda v: json.dumps(v, ensure_ascii=False).encode('utf-8'),
+        key_serializer=lambda k: k.encode('utf-8') if k else None,
+        client_id=kafka_config.KAFKA_CLIENT_ID,
+        # Cấu hình để đảm bảo gửi thành công
+        acks='all',  # Đợi tất cả replicas xác nhận
+        retries=3,
+        max_in_flight_requests_per_connection=1
+    )
+    return producer
 def send_documents_to_kafka(producer, data_folder=DATA_FOLDER):
     """Đọc tất cả file trong folder và gửi lên Kafka"""
     total_files = 0
