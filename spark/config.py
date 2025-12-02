@@ -10,4 +10,4 @@ KAFKA_STARTING_OFFSET = os.getenv("KAFKA_STARTING_OFFSET", "earliest")
 
 # Spark Configuration
 SPARK_APP_NAME = "LegalDocumentsConsumer"
-SPARK_MASTER = os.getenv("SPARK_MASTER", "local[*]")
+SPARK_MASTER = os.getenv("SPARK_MASTER", "local[*]") 
