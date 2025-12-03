@@ -17,4 +17,4 @@
 <img width="850" height="405" alt="Ảnh màn hình 2025-12-02 lúc 14 29 43" src="https://github.com/user-attachments/assets/e4f15348-4ec1-4558-889a-ba682a70bb91" />
 
 ### Chatbot
-<img width="850" height="405" alt="Ảnh màn hình 2025-12-02 lúc 14 29 43" src="https://github.com/user-attachments/assets/e4f15348-4ec1-4558-889a-ba682a70bb91" />
+<img width="668" height="582" alt="Chatbot" src="https://github.com/user-attachments/assets/f2179b2f-f402-4329-8be6-7aa551609bb8" />
